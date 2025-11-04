@@ -1,7 +1,7 @@
 import requests
 import logging
 from requests.exceptions import RequestException
-from pipeline.config import ConfigManager
+from omnicart_pipeline.pipeline.config import ConfigManager
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ class APIClient:
         """
         A private helper method to handle all GET requests and error handling.
         """
-        url = f"{self.base_url/endpoint}"
+        url = f"{self.base_url}/{endpoint}"
         try:
             response  = requests.get(url, params=params)
             #raise error for 4xxx and 5xx

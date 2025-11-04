@@ -1,0 +1,6 @@
+README.md
+setup.py
+omnicart_pipeline.egg-info/PKG-INFO
+omnicart_pipeline.egg-info/SOURCES.txt
+omnicart_pipeline.egg-info/dependency_links.txt
+omnicart_pipeline.egg-info/top_level.txt

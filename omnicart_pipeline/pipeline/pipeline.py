@@ -1,9 +1,9 @@
 import json
 import logging
-from .config import ConfigManager
-from .api_client import APIClient
-from .data_enricher import DataEnricher
-from .data_analyzer import DataAnalyzer
+from omnicart_pipeline.pipeline.config import ConfigManager
+from omnicart_pipeline.pipeline.api_client import APIClient
+from omnicart_pipeline.pipeline.data_enricher import DataEnricher
+from omnicart_pipeline.pipeline.data_analyzer import DataAnalyzer
 
 log = logging.getLogger(__name__)
 
