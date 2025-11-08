@@ -31,59 +31,62 @@ class DataEnricher:
         
         return product_df
    
-    def enrich_data(self, products: list[dict], users: list[dict]) -> pd.DataFrame:
+    def enrich_data(self,carts: list[dict], products: list[dict], users: list[dict]) -> pd.DataFrame:
         """
-        
+        Enriches cart data with product and user details.
         """
-        if not products:
-            log.warning("No products to enrich. Returning empty DataFrame.")
+        if not carts or not products or not users:
+            log.warning("No data to enrich. Returning empty DataFrame.")
             #return an empty dataframe
             return pd.DataFrame()
         
         try:
+            carts_df = pd.DataFrame(carts)
             products_df = pd.DataFrame(products)
-
-            if not users:
-                users_df = pd.DataFrame(columns=["id", "username", "email", "name"])
-            else:
-                users_df = pd.DataFrame(users)
+            users_df = pd.DataFrame(users)
         except Exception as e:
             log.error(f"failed to created DataFrames from API data: {e}")
             return pd.DataFrame()
         log.info(f"Loaded {len(products_df)} products and {len(users_df)} users into DataFrame")
         
         #Clean & Transform Product Data
-        products_df = self._flatten_product_data(products_df)
+        if 'products' not in carts_df.columns:
+                log.error("Carts DataFrame has no 'products' column. Cannot proceed.")
+                return pd.DataFrame()
+                
+        sales_df = carts_df.explode('products').reset_index(drop=True)
 
-        #Ensure price is numeric, coercing errors to NaN
-        products_df["price"] = pd.to_numeric(products_df["price"], errors='coerce')
-        products_df["revenue"] = products_df["price"] * products_df["quantity"]
-
-        #columns we need for join and report
-        user_columns = ['id', 'username', 'email', 'name']
-
-        for col in user_columns:
-            if col not in users_df.columns:
-                users_df[col] = pd.NaT if col == 'id' else pd.NA
-        users_df_subset = users_df[user_columns]
-
-        #Left join
-        log.info("Enriching product data with user information...")
+        sales_df = pd.concat([
+            sales_df.drop('products', axis=1), 
+            sales_df['products'].apply(pd.Series)
+        ], axis=1)
+        products_subset = products_df[['id', 'price', 'title']]
+        
         enriched_df = pd.merge(
-            products_df,
-            users_df_subset,
-            left_on="userId", #from products_df
-            right_on="id",    #from user_df_subset
-            how="left",
-            suffixes=("_product", "_user")
+            sales_df,
+            products_subset,
+            left_on='productId',
+            right_on='id',
+            how='left',
+            suffixes=('_cart', '_product')
         )
 
-        #Drop redundant user "id" column from join
-        if "id_user" in enriched_df.columns:
-            enriched_df = enriched_df.drop(columns=["id_user"])
-        #Rename product id 
-        if "id_product" in enriched_df.columns:
-            enriched_df = enriched_df.rename(columns={"id_product": "id"})
+        # Now we join the result with users to get seller info.
+        users_subset = users_df[['id', 'username']]
+        
+        enriched_df = pd.merge(
+            enriched_df,
+            users_subset,
+            left_on='userId',
+            right_on='id',
+            how='left',
+            suffixes=('_sale', '_user')
+        )
+
+        #revenue calculation
+        enriched_df['price'] = pd.to_numeric(enriched_df['price'], errors='coerce')
+        enriched_df['quantity'] = pd.to_numeric(enriched_df['quantity'], errors='coerce')
+        enriched_df['revenue'] = enriched_df['price'] * enriched_df['quantity']
 
         log.info("Data enrichment complete.")
         return enriched_df

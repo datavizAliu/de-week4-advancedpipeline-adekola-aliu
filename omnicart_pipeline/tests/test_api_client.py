@@ -1,5 +1,4 @@
 import pytest
-import requests
 from requests.exceptions import RequestException
 from unittest.mock import MagicMock, call
 from omnicart_pipeline.pipeline.config import ConfigManager
@@ -7,7 +6,7 @@ from omnicart_pipeline.pipeline.api_client import APIClient
 
 #base url the fake config will return
 FAKE_BASE_URL = "https://test.api.com"
-FAKE_PAGINATION_LIMIT = 5
+FAKE_PAGINATION_LIMIT = 2
 
 @pytest.fixture
 def mock_config_manager(mocker) -> ConfigManager:
@@ -23,7 +22,7 @@ def mock_config_manager(mocker) -> ConfigManager:
         if section == "API" and key == "pagination_limit":
             return FAKE_PAGINATION_LIMIT
         return None
-    mock_config.side_effect = get_side_effect
+    mock_config.get.side_effect = get_side_effect
     return mock_config
 
 @pytest.fixture
@@ -34,93 +33,76 @@ def api_client(mock_config_manager) -> APIClient:
     """
     return APIClient(mock_config_manager)
 
-def test_get_all_users_success(mocker, api_client):
+def test_fetch_all_data(mocker, api_client):
     """
-    Tests that get_all_users calls the correct URL and returns the data
-    on a successful API call.
+    Tests that fetch_all_data calls the API for products and users
+    and correctly populates the internal caches.
     """
-    # Arrange: Create fake data and a mock response
-    fake_users = [{"id": 1, "name": "Test User"}]
-    mock_response = MagicMock()
-    mock_response.json.return_value = fake_users
-    mock_response.raise_for_status = MagicMock() # Does nothing, i.e., "success"
+    # Arrange
+    fake_products = [{"id": 1}, {"id": 2}]
+    fake_users = [{"id": 10}, {"id": 20}]
+    fake_carts = [{"id": 100}]
 
-    mock_get = mocker.patch("requests.get", return_value = mock_response)
+    # Mock requests.get to return different data based on URL
+    def get_side_effect(url, params=None):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        if "products" in url:
+            mock_resp.json.return_value = fake_products
+        elif "users" in url:
+            mock_resp.json.return_value = fake_users
+        elif "carts" in url: 
+            mock_resp.json.return_value = fake_carts
+        else:
+            mock_resp.json.return_value = []
+        return mock_resp
+    mock_get = mocker.patch("requests.get", side_effect = get_side_effect)
+    #Act
+    api_client.fetch_all_data()
 
-    users = api_client.get_all_users()
+    #Asssert
+    assert mock_get.call_count == 3
+    mock_get.assert_has_calls([
+         call(f"{FAKE_BASE_URL}/products"),
+         call(f"{FAKE_BASE_URL}/users"),
+         call(f"{FAKE_BASE_URL}/carts")
+    ])
+    # 2. Check if caches are now populated
+    assert api_client._products_cache == fake_products
+    assert api_client._users_cache == fake_users
+    assert api_client._carts_cache == fake_carts
 
-    assert users == fake_users # Assert: Check the results
-    mock_get.assert_called_once() # Check that requests.get was called exactly once
-    mock_get.asser_called_with(f"{FAKE_BASE_URL}/users", params=None) # Check that it was called with the correct URL and no params
 
 
-def test_get_all_users_failure(mocker, api_client):
-        """
-        Tests that get_all_users returns an empty list if the API request fails.
-        """
-        #Arrange
-        mock_get = mocker.patch("requests.get", side_effect = RequestException("Test network error"))
-
-        #Act
-        users = api_client.get_all_users()
-
-        #Assert
-
-        assert users == [] #Should fail
-        mock_get.assert_called_once()
-
-def test_get_all_products_pagination(mocker, api_client):
-        """
-        This is the most important test.
-        It proves the pagination loop works, stops correctly, and concatenates results.
-        """
-
-        #Arrange
-        page_1_data = [{"id": 1}, {"id":2}] #page 1 with 2 products
-        page_2_data = []
-
-        #Mock responses for each page
-        mock_response_page_1 = MagicMock()
-        mock_response_page_1.json.return_value = page_1_data
-        mock_response_page_1.raise_for_status = MagicMock()
-
-        mock_response_page_2 = MagicMock()
-        mock_response_page_2.json.return_value = page_2_data
-        mock_response_page_2.raise_for_status = MagicMock()
-        
-        #Patch requests.get to return page 1 first, then page 2
-        mock_get = mocker.patch('requests.get', side_effect=[mock_response_page_1, mock_response_page_2])
-        
-        #Act 
-        products = api_client.get_all_products()
-
-        #Assert
-        #did we get the right final data?
-        assert products == page_1_data
-
-        #did it call the API exactly twice? (once for page 1, once for the empty page)
-        assert mock_get.call_count == 2
-
-        # expected_calls = [
-        #     #call 1: offset=0
-        #     call(f"{FAKE_BASE_URL}/products", params={'limit': FAKE_PAGINATION_LIMIT, 'offset': 0}),
-        #     # Call 2: offset=5 (0 + 5)
-        #     call(f"{FAKE_BASE_URL}/products", params={'limit': FAKE_PAGINATION_LIMIT, 'offset': FAKE_PAGINATION_LIMIT}),
-        # ]
-        # mock_get.assert_has_calls(expected_calls)
+def test_get_paginated_carts_generator(api_client):
+    """
+    Tests that the generator slices the cache correctly.
+    This test does NOT need any network mocks.
+    """
+    # Arrange: Manually set the cache with 5 items.
+    # Our limit is 2, so this should create 3 pages: [1,2], [3,4], [5]
+    api_client._carts_cache = [{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}, {"id": 5}]
     
-def test_get_all_products_failure_during_pagination(mocker, api_client):
-    """
-    Tests that if an error happens *during* pagination, we still
-    return an empty list (or you could decide to return what you have so far,
-    but returning [] is a simpler, safer failure mode).
-    """
-    #Arrange
-    mock_get = mocker.patch('requests.get', side_effect=RequestException("Test network error"))
-
-    # Act
-    products = api_client.get_all_products()
-
+    # Act: Call the generator and convert its output to a list
+    pages = list(api_client.get_paginated_carts())
+    
     # Assert
-    assert products == [] # Should fail gracefully
-    mock_get.assert_called_once() # Should stop after the first failed call
+    # 1. Should be 3 pages
+    assert len(pages) == 3
+    
+    # 2. Check the content of each page
+    assert pages[0] == [{"id": 1}, {"id": 2}]
+    assert pages[1] == [{"id": 3}, {"id": 4}]
+    assert pages[2] == [{"id": 5}]
+
+def test_get_paginated_carts_empty_cache(api_client):
+    """
+    Tests that the generator handles an empty cache gracefully.
+    """
+    # Arrange: Cache is left empty
+    
+    # Act
+    pages = list(api_client.get_paginated_carts())
+    
+    # Assert
+    assert len(pages) == 0

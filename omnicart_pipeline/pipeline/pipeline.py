@@ -1,5 +1,6 @@
 import json
 import logging
+import pandas as pd
 from omnicart_pipeline.pipeline.config import ConfigManager
 from omnicart_pipeline.pipeline.api_client import APIClient
 from omnicart_pipeline.pipeline.data_enricher import DataEnricher
@@ -40,24 +41,39 @@ class Pipeline:
         try:
             #EXTRACT
             log.info("--- Starting ETL Pipeline: EXTRACT Phase ---")
-            products = self.api_client.get_all_products()
+            self.api_client.fetch_all_data()
             users = self.api_client.get_all_users()
+            products = self.api_client.get_all_products()
+            if not users:
+                log.warning("No users fetched. Enrichment may be incomplete.")
             
-            if not products:
-                log.warning("No products fetched. Aborting pipeline.")
-                return
 
             #TRANSFORM
-            log.info("--- Starting ETL Pipeline: TRANSFORM Phase ---")
-            enriched_data = self.enricher.enrich_data(products, users)
+            log.info("--- Starting ETL Pipeline: TRANSFORM Phase (in pages)---")
             
-            if enriched_data.empty:
+            all_enriched_dataframes = []
+
+            for cart_page in self.api_client.get_paginated_carts(): 
+                log.info(f"Processing page with {len(cart_page)} carts...")
+                
+                # Enrich just this page of carts,
+                # but pass the *full* lookup tables for products and users
+                enriched_page_df = self.enricher.enrich_data(cart_page, products, users)
+                
+                all_enriched_dataframes.append(enriched_page_df)
+            if not all_enriched_dataframes:
+                log.warning("No data processed. Aborting pipeline.")
+                return
+            # Combine all the small DataFrames into one big one
+            log.info("Consolidating all processed pages...")
+            final_enriched_df = pd.concat(all_enriched_dataframes, ignore_index=True)
+            
+            if final_enriched_df.empty:
                 log.warning("Enrichment resulted in empty data. Aborting pipeline.")
                 return
-
             #ANALYZE (and LOAD)
             log.info("--- Starting ETL Pipeline: ANALYZE/LOAD Phase ---")
-            report = self.analyzer.analyze(enriched_data)
+            report = self.analyzer.analyze(final_enriched_df)
             
             #Load: Save the report to a JSON file
             with open(self.output_file, 'w') as f:
